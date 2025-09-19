@@ -9,7 +9,6 @@ Execute a Postman Monitor synchronously and surface the results in your workflow
 
 Status badges:
 - CI: ![CI](https://github.com/totus/execute-postman-monitor/actions/workflows/ci.yml/badge.svg)
-- Release: ![Release](https://github.com/totus/execute-postman-monitor/actions/workflows/release.yml/badge.svg)
 
 ## Usage
 
@@ -87,14 +86,13 @@ To publish a new version:
 ## Development
 
 - The CI workflow runs:
-  - actionlint to validate GitHub workflow syntax
   - an end-to-end test that executes this action against a local mock Postman API
 - Local structure:
   - `action.yml` — composite action definition
   - `test/mock-postman.js` — simple HTTP server used in CI tests
 
 ## Inspiration and docs
-
+- Original implementation: [execute-postman-monitor](https://github.com/postmanlabs/execute-postman-monitor) by [@davidespihernandez](https://github.com/davidespihernandez) a.k.a [@david-espi-hernandez](https://github.com/david-espi-hernandez)
 - Creating and publishing actions: GitHub Docs
 - Versioning guidance: Use major tags (e.g., `@v1`) for stable consumption
 
