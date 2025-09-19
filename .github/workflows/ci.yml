@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint workflows with actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Install actionlint
+        run: go install github.com/rhysd/actionlint/cmd/actionlint@latest
+      - name: Run actionlint
+        run: $HOME/go/bin/actionlint -color
+
+  test:
+    name: E2E test against mock Postman API
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: '20'
+      - name: Install test deps
+        run: |
+          mkdir -p test
+          npm init -y >/dev/null 2>&1 || true
+      - name: Start mock Postman API
+        run: |
+          node test/mock-postman.js &
+          echo $! > .mock-postman.pid
+          sleep 0.5
+      - name: Execute action (success path)
+        id: run_action
+        uses: ./
+        with:
+          postman-api-key: dummy
+          monitor-id: test-monitor
+          postman-host: http://127.0.0.1:4010
+      - name: Assert status output
+        run: |
+          test "${{ steps.run_action.outputs.status }}" = "success" || {
+            echo "Expected status=success, got: ${{ steps.run_action.outputs.status }}";
+            exit 1;
+          }
+      - name: Stop mock server
+        if: always()
+        run: |
+          if [ -f .mock-postman.pid ]; then kill $(cat .mock-postman.pid) || true; fi

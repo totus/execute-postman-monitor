@@ -1,0 +1,187 @@
+---
+name: Execute Postman Monitor
+description: Execute Postman Monitor in a synchronous manner and return the results
+
+author: Sphera
+branding:
+  icon: arrow-up-circle
+  color: blue
+
+inputs:
+  postman-api-key:
+    description: "Postman API Key"
+    required: true
+  monitor-id:
+    description: "Postman monitor ID"
+    required: true
+  postman-host:
+    description: "Override Postman API host (for testing or self-hosted gateways)."
+    required: false
+    default: "https://api.getpostman.com"
+
+outputs:
+  status:
+    description: "Postman monitor run status (success, failed, error, etc.)"
+    value: ${{ steps.execute-postman-monitor.outputs.status }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Execute Postman Monitor
+      id: execute-postman-monitor
+      uses: actions/github-script@v7
+      env:
+        POSTMAN_API_KEY: ${{ inputs.postman-api-key }}
+        MONITOR_ID: ${{ inputs.monitor-id }}
+        POSTMAN_HOST: ${{ inputs.postman-host }}
+      with:
+        script: |
+          const POSTMAN_HOST = process.env.POSTMAN_HOST || 'https://api.getpostman.com';
+          const MONITOR_ID = process.env.MONITOR_ID;
+          const API_KEY = process.env.POSTMAN_API_KEY;
+
+          if (!API_KEY) {
+            core.setFailed('Missing Postman API key');
+            return;
+          }
+          if (!MONITOR_ID) {
+            core.setFailed('Missing Postman monitor ID');
+            return;
+          }
+
+          function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+          async function callPostman(method, path, body, attempt = 0) {
+            const url = `${POSTMAN_HOST}${path}`;
+            const headers = {
+              'X-Api-Key': API_KEY,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+              'User-Agent': 'sphera-execute-postman-monitor-action'
+            };
+
+            core.info(`${method} ${url}`);
+            const res = await fetch(url, {
+              method,
+              headers,
+              body: body ? JSON.stringify(body) : undefined
+            });
+
+            const text = await res.text();
+            let json;
+            try { json = text ? JSON.parse(text) : {}; } catch (e) {
+              json = { raw: text };
+            }
+
+            if (res.status === 429 && attempt === 0) {
+              // Rate limited: respect Retry-After header (seconds) when present, otherwise short backoff
+              const retryAfterHeader = res.headers.get('RetryAfter');
+              const retrySeconds = retryAfterHeader && /^\d+$/.test(retryAfterHeader) ? parseInt(retryAfterHeader, 10) : 2;
+              const delayMs = Math.min(10000, Math.max(1000, retrySeconds * 1000));
+              core.warning(`Postman API rate limited (429). Retrying once after ${delayMs} ms...`);
+              await sleep(delayMs);
+              return callPostman(method, path, body, attempt + 1);
+            }
+
+            if (!res.ok && res.status !== 202) {
+              const message = `Postman API ${method} ${path} failed with HTTP ${res.status}: ${text}`;
+              throw new Error(message);
+            }
+
+            return { status: res.status, data: json };
+          }
+
+          function pick(obj, path, def = undefined) {
+            return path.split('.').reduce((acc, key) => (acc && acc[key] !== undefined ? acc[key] : undefined), obj) ?? def;
+          }
+
+          function extractRunPayload(postData, getData) {
+            // Prefer synchronous POST response (includes stats/executions/failures)
+            const postRun = pick(postData, 'run');
+            const postInfo = pick(postRun, 'info');
+            const postStats = pick(postRun, 'stats');
+            const postFailures = pick(postRun, 'failures', []);
+
+            if (postInfo && (postStats || pick(postRun, 'executions') || postFailures)) {
+              return {
+                name: pick(postInfo, 'name') || `Monitor ${MONITOR_ID}`,
+                status: pick(postInfo, 'status') || 'unknown',
+                startedAt: pick(postInfo, 'startedAt'),
+                finishedAt: pick(postInfo, 'finishedAt'),
+                stats: postStats || {},
+                failures: postFailures || []
+              };
+            }
+
+            // Fallback to GET /monitors/{id} (for 202 Accepted or async-like payloads)
+            const monitor = pick(getData, 'monitor', {});
+            const mName = pick(monitor, 'name') || pick(monitor, 'info.name');
+            const lastRun = pick(monitor, 'lastRun') || pick(getData, 'run');
+
+            return {
+              name: mName || pick(postInfo, 'name') || `Monitor ${MONITOR_ID}`,
+              status: pick(lastRun, 'status') || pick(lastRun, 'info.status') || 'unknown',
+              startedAt: pick(lastRun, 'startedAt') || pick(lastRun, 'info.startedAt'),
+              finishedAt: pick(lastRun, 'finishedAt') || pick(lastRun, 'info.finishedAt'),
+              stats: pick(lastRun, 'stats') || {},
+              failures: pick(lastRun, 'failures') || []
+            };
+          }
+
+          function toNumber(n, def = 0) { return typeof n === 'number' ? n : def; }
+
+          // 1) Trigger a synchronous monitor run (no async=true)
+          const postPath = `/monitors/${MONITOR_ID}/run`;
+          let postRes;
+          try {
+            postRes = await callPostman('POST', postPath, {});
+          } catch (err) {
+            core.setFailed(err.message);
+            return;
+          }
+
+          // 2) If the run exceeded 300s (HTTP 202) or came without stats (async-like), grab lastRun once
+          let getRes = { data: {} };
+          const missingStats = !pick(postRes.data, 'run.stats') && !pick(postRes.data, 'run.executions') && !pick(postRes.data, 'run.failures');
+          if (postRes.status === 202 || missingStats) {
+            core.info('Synchronous details not available (202 or no stats). Fetching monitor last run details once...');
+            try {
+              getRes = await callPostman('GET', `/monitors/${MONITOR_ID}`, undefined);
+            } catch (err) {
+              core.warning(`Failed to fetch monitor details: ${err.message}`);
+            }
+          }
+
+          // 3) Consolidate payload and derive outcome
+          const payload = extractRunPayload(postRes.data, getRes.data);
+          const status = (payload.status || '').toLowerCase();
+          const name = payload.name || `Monitor ${MONITOR_ID}`;
+          const stats = payload.stats || {};
+
+          core.setOutput('status', status);
+
+          const ok = status === 'success';
+
+          // 4) Write workflow summary
+          const icon = ok ? '✅' : (status === 'running' ? '⏳' : '❌');
+          await core.summary
+            .addHeading(`Postman Monitor: ${name}`)
+            .addRaw(`Status: ${icon} ${status}\n\n`)
+            .addTable([
+              [{data: 'Metric', header: true}, {data: 'Value', header: true}],
+              ['Assertions (total / failed)', `${toNumber(pick(stats, 'assertions.total'))} / ${toNumber(pick(stats, 'assertions.failed'))}`],
+              ['Requests (total / failed)', `${toNumber(pick(stats, 'requests.total'))} / ${toNumber(pick(stats, 'requests.failed'))}`],
+              ['Run Count', `${toNumber(pick(stats, 'runCount'))}`],
+              ['Error Count', `${toNumber(pick(stats, 'errorCount'))}`],
+              ['Aborted Count', `${toNumber(pick(stats, 'abortedCount'))}`],
+              ['Response Latency (ms)', `${toNumber(pick(stats, 'responseLatency'))}`],
+              ['Response Size (bytes)', `${toNumber(pick(stats, 'responseSize'))}`],
+              ['Started At', payload.startedAt ? String(payload.startedAt) : ''] ,
+              ['Finished At', payload.finishedAt ? String(payload.finishedAt) : '']
+            ])
+            .write();
+
+          // 5) Fail the step if the monitor did not succeed
+          if (!ok) {
+            core.setFailed(`Postman monitor run status: ${status}`);
+          }
