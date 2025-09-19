@@ -46,7 +46,7 @@ jobs:
         run: |
           if [ -f .mock-postman.pid ]; then kill $(cat .mock-postman.pid) || true; fi
       - name: Tag new release (patch) on main
-        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: success() && github.event_name == 'push'
         run: |
           set -e
           git config user.name "github-actions[bot]"
