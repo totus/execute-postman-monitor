@@ -56,6 +56,23 @@ Notes:
 |------|-------------|
 | `status` | Postman monitor run status (success, failed, error, etc.). |
 
+### Summary Sample
+#### Postman Monitor: API health check
+Status: ✅ success
+
+| Metric                     | Value                       |
+|-----------------------------|-----------------------------|
+| Assertions (total / failed) | 88 / 0                      |
+| Requests (total / failed)   | 21 / 0                      |
+| Run Count                   | 1                           |
+| Error Count                 | 0                           |
+| Aborted Count               | 0                           |
+| Response Latency (ms)       | 3643                        |
+| Response Size (bytes)       | 2690                        |
+| Started At                  | 2025-09-19T09:37:00.461Z    |
+| Finished At                 | 2025-09-19T09:37:06.801Z    |
+
+
 ### Advanced: custom Postman host (for testing)
 
 The action accepts an optional `postman-host` input. This is primarily intended for tests: in CI we spin up a tiny mock server and point the action at it.
