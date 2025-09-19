@@ -1,0 +1,58 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to tag and release (e.g., v1.2.3)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Create GitHub Release and update major tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push'
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+
+      - name: Create tag and release (manual)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ -z "$VERSION" ]; then echo "version is required"; exit 1; fi
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Update major tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            CURRENT_TAG="${{ inputs.version }}"
+          else
+            CURRENT_TAG="$REF_NAME"
+          fi
+          MAJOR_TAG="${CURRENT_TAG%%.*}"
+          echo "Current tag: $CURRENT_TAG; Major tag: $MAJOR_TAG"
+          # Fetch tags to ensure we can move major tag
+          git fetch --tags
+          # Move (or create) the major tag to the current commit
+          git tag -fa "$MAJOR_TAG" -m "Update $MAJOR_TAG to $CURRENT_TAG"
+          git push origin "refs/tags/$MAJOR_TAG" --force
