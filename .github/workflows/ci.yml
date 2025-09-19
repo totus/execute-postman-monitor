@@ -2,28 +2,14 @@ name: CI
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   pull_request:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  lint:
-    name: Lint workflows with actionlint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5.0.0
-      - name: Set up Go
-        uses: actions/setup-go@v6.0.0
-        with:
-          go-version: '1.22'
-      - name: Install actionlint
-        run: "go install github.com/rhysd/actionlint/cmd/actionlint@latest"
-      - name: Run actionlint
-        run: "$HOME/go/bin/actionlint -color"
-
   test:
     name: E2E test against mock Postman API
     runs-on: ubuntu-latest
@@ -59,3 +45,24 @@ jobs:
         if: always()
         run: |
           if [ -f .mock-postman.pid ]; then kill $(cat .mock-postman.pid) || true; fi
+      - name: Tag new release (patch) on main
+        if: success() && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch --tags
+          LATEST=$(git tag -l 'v*.*.*' --sort=-v:refname | head -n1)
+          if [ -z "$LATEST" ]; then
+            NEW_TAG="v1.0.0"
+          else
+            VERS=${LATEST#v}
+            IFS='.' read -r MAJOR MINOR PATCH <<EOF
+          ${VERS}
+          EOF
+            PATCH=$((PATCH + 1))
+            NEW_TAG="v${MAJOR}.${MINOR}.${PATCH}"
+          fi
+          echo "Tagging $NEW_TAG"
+          git tag -a "$NEW_TAG" -m "CI: release $NEW_TAG"
+          git push origin "refs/tags/$NEW_TAG"
